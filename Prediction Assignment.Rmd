@@ -1,0 +1,161 @@
+---
+title: "Prediction Assignment"
+author: "Ramesh Narasimhan"
+date: "December 1, 2017"
+output: html_document
+---
+
+## Background
+
+One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it. In this project, our goal is to use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants and predict the manner in which they did the exercise. This is the "classe" variable in the training set. 
+
+## Env setup & Data read
+```{r setup, echo=FALSE}
+library(caret)
+library(RANN)
+library(e1071)
+library(randomForest)
+set.seed(12345)
+```
+
+Let us read the training and testing files.
+
+```{r readFiles}
+training <- read.csv("pml-training.csv")
+testing <- read.csv("pml-testing.csv")
+dim(training)
+dim(testing)
+```
+
+## Exploratory Analysis of the data
+
+Let us ensure the column names are matching in both the datasets.
+
+```{r chkCols}
+sum((names(testing)==names(training)))
+```
+
+Looks like there is a difference in columns. On further investigation it is evident that the testing dataset does not have classe variable. So will add classe to the testing dataset for uniformity.
+
+```{r addClasse}
+testing$classe <- NA
+```
+
+## Prediction Study Design
+
+For this study, we will first identify the predictors we will consider. Then analyse the predictors and eliminate any predictors with near zero variance. Then we will be splitting the training data into 3 folds using k-fold. Each fold will constitute the smaller training set with the remaining data (in the original training data set) constituting the test set corresponding to that fold. We then build 3 random forest prediction models on each of the folds and test their accuracy. The best performing model is then selected to predict the outcome for the original test data.
+
+
+## Decide on Covariates for the model
+
+Now let us identify all the columns that are to do with the belt, forearm, arm, and dumbell.Since classe is the outcome variable, let us also find its position in the dataset.
+
+```{r selCols}
+posClasse <- grep("classe", colnames(training))
+
+i <- grep("arm",names(training)) 
+j <- grep("belt",names(training))
+k <- grep("dumbbell",names(training))
+selCols <- names(training)[c(i,j,k,posClasse)]
+
+length(selCols)
+
+```
+
+Now the number of predictors to consider has reduced from 159 to 153. Let us filter our datasets to only include these columns.
+
+```{r select}
+trainingSelect <- training[,selCols]
+testingSelect <- testing[,selCols]
+
+```
+
+Let us next eliminate variables with near zero variance and create filtered training and test data sets.
+
+```{r nearZeroV}
+nzv <- nearZeroVar(trainingSelect)
+trainingSelectFiltered <- trainingSelect[,-nzv]
+testingSelectFiltered <- testingSelect[,-nzv]
+
+dim(trainingSelectFiltered)
+dim(testingSelectFiltered)
+
+```
+Now the number of predictors have come down further. 
+
+## Imputing missing data
+
+On running str(trainingSelectFiltered) it is clear that there are several feilds which have missing values. The code is not shown here as the output is long. Let us impute the missing data.
+
+```{r impute}
+posClasse <- grep("classe", colnames(trainingSelectFiltered))
+preObj <- preProcess(trainingSelectFiltered[,-posClasse],method="knnImpute")
+
+trainingSelectFilteredImp <- predict(preObj,trainingSelectFiltered[,-posClasse])
+trainingSelectFilteredImp$classe <- trainingSelectFiltered$classe
+
+testingSelectFilteredImp <- predict(preObj,testingSelectFiltered[,-posClasse])
+testingSelectFilteredImp$classe <- as.factor(testingSelectFiltered$classe)
+
+```
+## Data slicing
+
+```{r slice}
+flds <- createFolds(trainingSelectFilteredImp$classe, k = 3, list = TRUE, returnTrain = FALSE)
+str(flds)
+
+```
+## Cross validation & model building
+
+Create a variable to hold the accuracy data of each model.
+
+```{r acc}
+accuracy <- matrix(ncol=3)
+```
+
+Let us build the first model with Fold1 as training data and remaining as test data:
+```{r buildModel1}
+modFit1 <- randomForest(classe ~ ., data=trainingSelectFilteredImp[flds$Fold1,], do.trace=100)
+pred <- predict(modFit1, trainingSelectFilteredImp[-flds$Fold1,])
+accuracy[1] <- sum(pred==trainingSelectFilteredImp[-flds$Fold1,]$classe)/length(trainingSelectFilteredImp[-flds$Fold1,]$classe)
+```
+
+Let us build the second model with Fold2 as training data and remaining as test data:
+
+```{r buildModel2}
+modFit2 <- randomForest(classe ~ ., data=trainingSelectFilteredImp[flds$Fold2,], do.trace=100)
+pred <- predict(modFit2, trainingSelectFilteredImp[-flds$Fold2,])
+accuracy[2] <- sum(pred==trainingSelectFilteredImp[-flds$Fold2,]$classe)/length(trainingSelectFilteredImp[-flds$Fold2,]$classe)
+```
+
+Now the final model with Fold3 as training data and remaining as test data:
+
+```{r buildModel3}
+modFit3 <- randomForest(classe ~ ., data=trainingSelectFilteredImp[flds$Fold3,], do.trace=100)
+pred <- predict(modFit3, trainingSelectFilteredImp[-flds$Fold3,])
+accuracy[3] <- sum(pred==trainingSelectFilteredImp[-flds$Fold3,]$classe)/length(trainingSelectFilteredImp[-flds$Fold3,]$classe)
+
+```
+
+Let us see the accuracy of the three models
+```{r mAcc}
+accuracy
+```
+
+## Choose the best model
+
+```{r choose}
+x<- as.name(paste("modFit",which(accuracy == max(accuracy)), sep = ""))
+
+paste("The best model is ", x, sep = "")
+```
+
+## Predict using selected model
+
+The predicted values for the original test data set are:
+
+```{r predict}
+testingSelectFilteredImp$classe <- predict(eval(x), testingSelectFilteredImp)
+testingSelectFilteredImp$classe
+```
+
